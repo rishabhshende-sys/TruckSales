@@ -10,9 +10,9 @@ The date at the top applies to every screen. Tap it to pick a date, or use ◀ �
 | Tab | What it does |
 |---|---|
 | **Dashboard** | KPI cards (day sales ₹, month sales ₹, day qty, month qty), truck performance table, daily sales graph for the month, monthly graph for the last 12 months, truck-wise comparison graph. |
-| **Entry** | Pick a truck, then type **Opening** and **Closing** stock for each product. **Sold = Opening − Closing** and the value (Sold × day's rate) appear instantly. Tap **Save**. Opening is pre-filled from that truck's last closing stock (change it if more stock was put on the truck). Leave a product blank if the truck did not carry it. |
-| **Reports** | Choose From/To dates: summary, date-wise list (tap a date to see every truck and product with the full calculation), truck-wise and product-wise totals. |
-| **Settings** (PIN, default **1234**) | Revise rates and product names, edit truck names and village routes, change the PIN. |
+| **Entry** | **Morning:** pick a truck, enter **Opening** stock, tap **Save**. **Evening:** when the truck returns, open the same truck and date, enter **Closing** stock, tap **Save**. **Sold = Opening − Closing** and the value (Sold × day's rate) are calculated then. Truck buttons turn **orange** while closing is pending and **green** when completed. Opening is pre-filled from that truck's last closing stock. Leave a product blank if the truck did not carry it. |
+| **Reports** | Choose From/To dates: summary, date-wise list (tap a date to see every truck and product with the full calculation), truck-wise and product-wise totals. **Export this period to Excel (CSV)** saves a detailed file that opens in Excel / Google Sheets. |
+| **Settings** (PIN, default **1234**) | Revise rates and product names, edit truck names and village routes, **Backup now / Restore from backup**, change the PIN. |
 
 ### How rates work
 - Rates are saved **effective from the date shown at the top**. To revise today's rates, open Settings
@@ -46,6 +46,17 @@ Requirements: JDK 17+, Android SDK platform 35 (Android Studio installs these au
 1. Copy `TruckSales.apk` to the phone (WhatsApp to yourself, USB cable, or Google Drive).
 2. Open it. If asked, allow **Install unknown apps** for the app you opened it with.
 3. Tap **Install**. Works on Android 5.0 and newer.
+
+Sales of a truck count in the dashboard and reports only after its closing stock is entered. The
+dashboard lists trucks whose closing is still pending.
+
+### Backup (do this weekly)
+- **Settings → Backup now** saves all data to one file. In the picker choose **Google Drive** (or any
+  other cloud/storage app on the phone) to keep a copy off the phone, or Downloads / SD card.
+- **Settings → Restore from backup** puts that data back, e.g. on a new phone after installing the app.
+- The dashboard shows a reminder when the last backup is more than 7 days old.
+- Android's own phone backup (Settings → Google → Backup) also includes this app's data automatically
+  when it is switched on, but don't rely on it alone.
 
 ### Keeping data safe
 - Data stays on the phone after closing the app or restarting the phone.

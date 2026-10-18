@@ -14,9 +14,11 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
-/** Daily stock entry for one truck: opening and closing per product; sold and value are automatic. */
+/** Daily stock entry for one truck: opening in the morning, closing in the evening; sold and value are automatic. */
 final class EntryScreen extends Screen {
+    private static final int ORANGE = 0xFFE65100, ORANGE_BG = 0xFFFFE0B2, GREEN_BG = 0xFFC8E6C9;
     private static int truck = 1; // remembered while the app is open
     private List<Db.Entry> rows;
     private final List<EditText[]> inputs = new ArrayList<>();
@@ -39,11 +41,14 @@ final class EntryScreen extends Screen {
         List<Db.Truck> trucks = db.trucks();
         LinearLayout sel = Ui.box(a, false);
         String route = "";
+        Map<Integer, int[]> st = db.status(a.date);
         for (Db.Truck t : trucks) {
             Button b = Ui.button(a, t.name, t.id == truck);
+            int[] s = st.get(t.id);
             if (t.id != truck) {
+                // orange = morning stock saved, closing pending; green = completed; white = not started
                 GradientDrawable g = new GradientDrawable();
-                g.setColor(Ui.CARD);
+                g.setColor(s == null ? Ui.CARD : s[1] > 0 ? ORANGE_BG : GREEN_BG);
                 g.setStroke(1, Ui.LINE);
                 g.setCornerRadius(Ui.dp(a, 8));
                 b.setBackground(g);
@@ -59,12 +64,18 @@ final class EntryScreen extends Screen {
         TextView rt = Ui.text(a, "Route: " + route, 13, Ui.MUTED, false);
         rt.setPadding(Ui.dp(a, 4), Ui.dp(a, 6), 0, Ui.dp(a, 6));
         root.addView(rt);
+        int[] mine = st.get(truck);
+        TextView status = Ui.text(a, mine == null ? "Morning: enter opening stock and tap Save. Closing can be added in the evening."
+                : mine[1] > 0 ? "Truck out – closing pending for " + mine[1] + " product(s). Enter closing when the truck returns, then Save."
+                : "Completed ✓", 13, mine == null ? Ui.MUTED : mine[1] > 0 ? ORANGE : Ui.GREEN, true);
+        status.setPadding(Ui.dp(a, 4), 0, 0, Ui.dp(a, 6));
+        root.addView(status);
 
         // Header
         LinearLayout head = Ui.box(a, false);
         head.addView(cell("Product @ rate", Gravity.START), Ui.weight(1.5f));
         head.addView(cell("Opening", Gravity.CENTER), Ui.weight(1));
-        head.addView(cell("Closing", Gravity.CENTER), Ui.weight(1));
+        head.addView(cell("Closing\n(evening)", Gravity.CENTER), Ui.weight(1));
         head.addView(cell("Sold / ₹", Gravity.END), Ui.weight(1.3f));
         root.addView(head);
 
@@ -151,24 +162,30 @@ final class EntryScreen extends Screen {
             out.setText(Ui.qty(r[0]) + "\n" + Ui.money(r[1]));
         } else {
             boolean blank = inputs.get(i)[1].getText().toString().trim().isEmpty();
-            out.setTextColor(blank ? Ui.MUTED : Ui.RED);
-            out.setText(blank ? "–" : "Check");
+            boolean hasOpening = !inputs.get(i)[0].getText().toString().trim().isEmpty();
+            out.setTextColor(blank ? (hasOpening ? ORANGE : Ui.MUTED) : Ui.RED);
+            out.setText(blank ? (hasOpening ? "Pending" : "–") : "Check");
         }
         if (total != null) updateTotal();
     }
 
     private void updateTotal() {
         double q = 0, v = 0;
+        int pending = 0;
         for (int i = 0; i < rows.size(); i++) {
             double[] r = calc(i);
             if (r != null) { q += r[0]; v += r[1]; }
+            else if (inputs.get(i)[1].getText().toString().trim().isEmpty()
+                    && !inputs.get(i)[0].getText().toString().trim().isEmpty()) pending++;
         }
-        total.setText("Sold " + Ui.qty(Calc.round2(q)) + "  |  " + Ui.money(Calc.round2(v)));
+        total.setText("Sold " + Ui.qty(Calc.round2(q)) + "  |  " + Ui.money(Calc.round2(v))
+                + (pending > 0 ? "\n" + pending + " waiting for closing" : ""));
     }
 
     private void save() {
         List<double[]> data = new ArrayList<>();
         boolean zeroRate = false;
+        int pending = 0;
         for (int i = 0; i < rows.size(); i++) {
             Db.Entry e = rows.get(i);
             Double o, c;
@@ -180,9 +197,14 @@ final class EntryScreen extends Screen {
                 return;
             }
             if (nz(o) == 0 && nz(c) == 0) continue; // product not carried today
-            if (c == null) {
-                error(i, e.name + ": please enter closing stock.");
+            if (o == null) {
+                error(i, e.name + ": please enter opening stock.", 0);
                 return;
+            }
+            if (c == null) { // morning entry: truck not back yet
+                pending++;
+                data.add(new double[]{e.pid, o, Double.NaN, e.rate});
+                continue;
             }
             String err = Calc.check(nz(o), c);
             if (err != null) {
@@ -192,10 +214,15 @@ final class EntryScreen extends Screen {
             if (e.rate == 0 && Calc.sold(nz(o), c) > 0) zeroRate = true;
             data.add(new double[]{e.pid, nz(o), c, e.rate});
         }
+        if (data.isEmpty()) {
+            a.toast("Nothing to save – enter opening stock first");
+            return;
+        }
+        final int waiting = pending;
         Runnable doSave = () -> {
             db.saveEntry(a.date, truck, data);
             dirty = false;
-            a.toast("Saved");
+            a.toast(waiting > 0 ? "Saved. Enter closing stock when the truck returns." : "Saved – sales calculated");
             a.render();
         };
         if (zeroRate) {
@@ -206,8 +233,10 @@ final class EntryScreen extends Screen {
         } else doSave.run();
     }
 
-    private void error(int i, String msg) {
+    private void error(int i, String msg) { error(i, msg, 1); }
+
+    private void error(int i, String msg, int field) {
         new AlertDialog.Builder(a).setTitle("Please check").setMessage(msg).setPositiveButton("OK", null).show();
-        inputs.get(i)[1].requestFocus();
+        inputs.get(i)[field].requestFocus();
     }
 }

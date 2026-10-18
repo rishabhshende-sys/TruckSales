@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.graphics.drawable.GradientDrawable;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
@@ -15,6 +18,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Calendar;
 import java.util.Locale;
 
@@ -146,4 +151,66 @@ public class MainActivity extends Activity {
     }
 
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
+
+    // ---------- files: the phone's own "Save to" / "Open from" picker (Drive, Downloads, SD card...) ----------
+
+    interface Out { void write(OutputStream o) throws Exception; }
+
+    interface In { void read(InputStream i) throws Exception; }
+
+    private Out pendingOut;
+    private In pendingIn;
+    private String pendingDone;
+
+    /** Lets the user choose where to save a new file, then writes it. */
+    void saveFile(String fileName, String mime, String doneMsg, Out w) {
+        pendingOut = w;
+        pendingDone = doneMsg;
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType(mime);
+        i.putExtra(Intent.EXTRA_TITLE, fileName);
+        start(i, 1);
+    }
+
+    /** Lets the user pick a file, then reads it. */
+    void openFile(String doneMsg, In r) {
+        pendingIn = r;
+        pendingDone = doneMsg;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        start(i, 2);
+    }
+
+    private void start(Intent i, int code) {
+        try {
+            startActivityForResult(i, code);
+        } catch (ActivityNotFoundException e) {
+            toast("No file app found on this phone");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (result != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        try {
+            if (code == 1 && pendingOut != null) {
+                try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) { pendingOut.write(o); }
+            } else if (code == 2 && pendingIn != null) {
+                try (InputStream in = getContentResolver().openInputStream(uri)) { pendingIn.read(in); }
+            } else return;
+            new AlertDialog.Builder(this).setMessage(pendingDone).setPositiveButton("OK", null).show();
+        } catch (Exception e) {
+            new AlertDialog.Builder(this).setTitle("Could not complete")
+                    .setMessage(e.getMessage() == null ? e.toString() : e.getMessage())
+                    .setPositiveButton("OK", null).show();
+        } finally {
+            pendingOut = null;
+            pendingIn = null;
+            render();
+        }
+    }
 }

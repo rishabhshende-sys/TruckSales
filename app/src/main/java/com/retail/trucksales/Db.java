@@ -6,6 +6,12 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -36,7 +42,17 @@ final class Db extends SQLiteOpenHelper {
         return inst;
     }
 
-    private Db(Context c) { super(c, "truck_sales.db", null, 1); }
+    static final String NAME = "truck_sales.db";
+    private final Context ctx;
+
+    private Db(Context c) { super(c, NAME, null, 2); ctx = c; }
+
+    /** closing is NULL while the truck is still out (morning entry saved, evening entry pending). */
+    private static String salesTable(String name) {
+        return "CREATE TABLE " + name + "(date TEXT NOT NULL, truck_id INTEGER NOT NULL, product_id INTEGER NOT NULL,"
+                + " opening REAL NOT NULL, loaded REAL NOT NULL DEFAULT 0, closing REAL, qty REAL NOT NULL,"
+                + " rate REAL NOT NULL, value REAL NOT NULL, PRIMARY KEY(date, truck_id, product_id))";
+    }
 
     @Override
     public void onCreate(SQLiteDatabase d) {
@@ -44,9 +60,7 @@ final class Db extends SQLiteOpenHelper {
         d.execSQL("CREATE TABLE rates(product_id INTEGER NOT NULL, eff_date TEXT NOT NULL, rate REAL NOT NULL,"
                 + " PRIMARY KEY(product_id, eff_date))");
         d.execSQL("CREATE TABLE trucks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, route TEXT NOT NULL)");
-        d.execSQL("CREATE TABLE sales(date TEXT NOT NULL, truck_id INTEGER NOT NULL, product_id INTEGER NOT NULL,"
-                + " opening REAL NOT NULL, loaded REAL NOT NULL, closing REAL NOT NULL, qty REAL NOT NULL,"
-                + " rate REAL NOT NULL, value REAL NOT NULL, PRIMARY KEY(date, truck_id, product_id))");
+        d.execSQL(salesTable("sales"));
         d.execSQL("CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT)");
         for (int i = 1; i <= PRODUCTS; i++) {
             d.execSQL("INSERT INTO products VALUES(?,?)", new Object[]{i, "Product " + i});
@@ -58,7 +72,14 @@ final class Db extends SQLiteOpenHelper {
     }
 
     @Override
-    public void onUpgrade(SQLiteDatabase d, int oldV, int newV) {}
+    public void onUpgrade(SQLiteDatabase d, int oldV, int newV) {
+        if (oldV < 2) { // v1 required closing stock; keep all existing rows
+            d.execSQL(salesTable("sales_new"));
+            d.execSQL("INSERT INTO sales_new SELECT date,truck_id,product_id,opening,loaded,closing,qty,rate,value FROM sales");
+            d.execSQL("DROP TABLE sales");
+            d.execSQL("ALTER TABLE sales_new RENAME TO sales");
+        }
+    }
 
     // ---------------- settings ----------------
 
@@ -147,13 +168,15 @@ final class Db extends SQLiteOpenHelper {
             while (c.moveToNext()) {
                 Entry e = byId.get(c.getInt(0));
                 if (e == null) continue;
-                e.opening = c.getDouble(1); e.closing = c.getDouble(3);
+                e.opening = c.getDouble(1);
+                e.closing = c.isNull(3) ? null : c.getDouble(3);
                 saved = true;
             }
         }
         if (!saved) {
-            String sql = "SELECT s.product_id, s.closing FROM sales s WHERE s.truck_id=? AND s.date="
-                    + "(SELECT MAX(x.date) FROM sales x WHERE x.truck_id=s.truck_id AND x.product_id=s.product_id AND x.date<?)";
+            String sql = "SELECT s.product_id, s.closing FROM sales s WHERE s.truck_id=? AND s.closing IS NOT NULL AND s.date="
+                    + "(SELECT MAX(x.date) FROM sales x WHERE x.truck_id=s.truck_id AND x.product_id=s.product_id"
+                    + " AND x.closing IS NOT NULL AND x.date<?)";
             try (Cursor c = getReadableDatabase().rawQuery(sql, new String[]{t, date})) {
                 while (c.moveToNext()) {
                     Entry e = byId.get(c.getInt(0));
@@ -164,19 +187,33 @@ final class Db extends SQLiteOpenHelper {
         return list;
     }
 
-    /** Replaces the day's entry for one truck. Each row: {productId, opening, closing, rate}. Sold = opening - closing. */
+    /**
+     * Replaces the day's entry for one truck. Each row: {productId, opening, closing, rate}.
+     * closing = NaN means "truck not back yet": stored as NULL with qty and value 0 until closing is entered.
+     */
     void saveEntry(String date, int truck, List<double[]> rows) {
         SQLiteDatabase d = getWritableDatabase();
         d.beginTransaction();
         try {
             d.execSQL("DELETE FROM sales WHERE date=? AND truck_id=?", new Object[]{date, truck});
             for (double[] r : rows) {
-                double q = Calc.sold(r[1], r[2]);
+                boolean pending = Double.isNaN(r[2]);
+                double q = pending ? 0 : Calc.sold(r[1], r[2]);
                 d.execSQL("INSERT INTO sales VALUES(?,?,?,?,?,?,?,?,?)", new Object[]{date, truck, (int) r[0],
-                        r[1], 0, r[2], q, r[3], Calc.value(q, r[3])});
+                        r[1], 0, pending ? null : r[2], q, r[3], Calc.value(q, r[3])});
             }
             d.setTransactionSuccessful();
         } finally { d.endTransaction(); }
+    }
+
+    /** truckId -> {products saved, products waiting for closing} for one date. */
+    Map<Integer, int[]> status(String date) {
+        Map<Integer, int[]> out = new HashMap<>();
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT truck_id, COUNT(*), SUM(closing IS NULL) FROM sales"
+                + " WHERE date=? GROUP BY truck_id", new String[]{date})) {
+            while (c.moveToNext()) out.put(c.getInt(0), new int[]{c.getInt(1), c.getInt(2)});
+        }
+        return out;
     }
 
     // ---------------- reports ----------------
@@ -208,11 +245,84 @@ final class Db extends SQLiteOpenHelper {
             while (c.moveToNext()) {
                 String[] r = new String[8];
                 r[0] = c.getString(0); r[1] = c.getString(1);
-                r[2] = Ui.qty(c.getDouble(2)); r[3] = Ui.qty(c.getDouble(3)); r[4] = Ui.qty(c.getDouble(4));
+                r[2] = Ui.qty(c.getDouble(2)); r[3] = Ui.qty(c.getDouble(3));
+                r[4] = c.isNull(4) ? null : Ui.qty(c.getDouble(4));
                 r[5] = Ui.qty(c.getDouble(5)); r[6] = Ui.money(c.getDouble(6)); r[7] = Ui.money(c.getDouble(7));
                 out.add(r);
             }
         }
         return out;
+    }
+
+    // ---------------- backup, restore, export ----------------
+
+    /** Writes a complete copy of the database (all products, rates, trucks, sales, PIN) to the stream. */
+    synchronized void backup(OutputStream out) throws IOException {
+        SQLiteDatabase d = getWritableDatabase();
+        try (Cursor c = d.rawQuery("PRAGMA wal_checkpoint(FULL)", null)) { c.moveToFirst(); }
+        close();
+        try (InputStream in = new FileInputStream(ctx.getDatabasePath(NAME))) {
+            copy(in, out);
+        }
+    }
+
+    /** Replaces all data with a backup file. Throws if the file is not a Truck Sales backup. */
+    synchronized void restore(InputStream in) throws IOException {
+        File tmp = new File(ctx.getCacheDir(), "restore.db");
+        try (OutputStream o = new FileOutputStream(tmp)) { copy(in, o); }
+        boolean ok = false;
+        try {
+            SQLiteDatabase t = SQLiteDatabase.openDatabase(tmp.getPath(), null, SQLiteDatabase.OPEN_READONLY);
+            try (Cursor c = t.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    + " AND name IN ('products','rates','trucks','sales','settings')", null)) {
+                ok = c.moveToFirst() && c.getInt(0) == 5;
+            } finally { t.close(); }
+        } catch (RuntimeException e) {
+            ok = false;
+        }
+        if (!ok) { tmp.delete(); throw new IOException("This is not a Truck Sales backup file"); }
+        close();
+        File dbf = ctx.getDatabasePath(NAME);
+        new File(dbf.getPath() + "-wal").delete();
+        new File(dbf.getPath() + "-shm").delete();
+        new File(dbf.getPath() + "-journal").delete();
+        try (InputStream i = new FileInputStream(tmp); OutputStream o = new FileOutputStream(dbf)) { copy(i, o); }
+        tmp.delete();
+        getWritableDatabase(); // reopen (upgrades older backups automatically)
+    }
+
+    /** Detailed CSV (opens in Excel / Google Sheets) for a date range. */
+    void exportCsv(String from, String to, OutputStream out) throws IOException {
+        StringBuilder b = new StringBuilder("Date,Truck,Route,Product,Opening,Closing,Sold,Rate,Value,Status\n");
+        String sql = "SELECT s.date, t.name, t.route, p.name, s.opening, s.closing, s.qty, s.rate, s.value FROM sales s"
+                + " JOIN trucks t ON t.id=s.truck_id JOIN products p ON p.id=s.product_id"
+                + " WHERE s.date BETWEEN ? AND ? ORDER BY s.date, s.truck_id, s.product_id";
+        try (Cursor c = getReadableDatabase().rawQuery(sql, new String[]{from, to})) {
+            while (c.moveToNext()) {
+                boolean pending = c.isNull(5);
+                b.append(c.getString(0)).append(',').append(csv(c.getString(1))).append(',')
+                        .append(csv(c.getString(2))).append(',').append(csv(c.getString(3))).append(',')
+                        .append(num(c.getDouble(4))).append(',').append(pending ? "" : num(c.getDouble(5))).append(',')
+                        .append(num(c.getDouble(6))).append(',').append(num(c.getDouble(7))).append(',')
+                        .append(num(c.getDouble(8))).append(',').append(pending ? "Closing pending" : "Done").append('\n');
+            }
+        }
+        out.write(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}); // UTF-8 marker so Excel shows ₹ / Hindi names correctly
+        out.write(b.toString().getBytes("UTF-8"));
+    }
+
+    private static String csv(String v) {
+        return "\"" + (v == null ? "" : v.replace("\"", "\"\"")) + "\"";
+    }
+
+    private static String num(double v) {
+        return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(Calc.round2(v));
+    }
+
+    private static void copy(InputStream in, OutputStream out) throws IOException {
+        byte[] buf = new byte[16384];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        out.flush();
     }
 }

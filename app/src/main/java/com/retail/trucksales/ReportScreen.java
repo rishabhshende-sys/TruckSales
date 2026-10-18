@@ -35,6 +35,10 @@ final class ReportScreen extends Screen {
             a.render();
         });
         p.addView(month, Ui.fullWidth());
+        Button export = Ui.button(a, "Export this period to Excel (CSV)", false);
+        export.setOnClickListener(v -> a.saveFile("TruckSales_" + from + "_to_" + to + ".csv", "text/csv",
+                "Exported. Open the file with Excel or Google Sheets.", o -> db.exportCsv(from, to, o)));
+        p.addView(export, Ui.fullWidth());
 
         Map<String, double[]> byDate = db.group("date", from, to);
         double[] tot = db.total(from, to);
@@ -86,7 +90,9 @@ final class ReportScreen extends Screen {
                 lastTruck = r[0];
                 l.addView(Ui.text(a, "\n" + r[0], 15, Ui.PRIMARY, true));
             }
-            l.addView(Ui.text(a, r[1] + "\nOpen " + r[2] + " − Close " + r[4]
+            l.addView(r[4] == null
+                    ? Ui.text(a, r[1] + "\nOpen " + r[2] + " – closing pending", 13, 0xFFE65100, false)
+                    : Ui.text(a, r[1] + "\nOpen " + r[2] + " − Close " + r[4]
                     + " = " + r[5] + " × " + r[6] + " = " + r[7], 13, Ui.TEXT, false));
             l.addView(Ui.divider(a));
         }

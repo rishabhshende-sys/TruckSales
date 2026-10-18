@@ -18,6 +18,27 @@ final class DashboardScreen extends Screen {
         String mName = Calc.monthName(month, true);
         LinearLayout p = Ui.page(a);
 
+        // Trucks still out (morning stock saved, closing not entered yet)
+        StringBuilder pend = new StringBuilder();
+        Map<Integer, int[]> st = db.status(day);
+        for (Db.Truck t : db.trucks()) {
+            int[] x = st.get(t.id);
+            if (x != null && x[1] > 0) pend.append(pend.length() > 0 ? ", " : "").append(t.name);
+        }
+        if (pend.length() > 0) {
+            LinearLayout pc = Ui.card(a, null);
+            pc.addView(Ui.text(a, "Closing stock pending: " + pend + "\nSales for these trucks are added once closing is entered.",
+                    13, 0xFFE65100, true));
+            p.addView(pc);
+        }
+        String lastBackup = db.setting("last_backup", "");
+        if (lastBackup.isEmpty() || lastBackup.compareTo(Calc.addDays(Calc.today(), -7)) < 0) {
+            LinearLayout bc = Ui.card(a, null);
+            bc.addView(Ui.text(a, lastBackup.isEmpty() ? "No backup yet. Settings → Backup now."
+                    : "Last backup " + Calc.shortDate(lastBackup) + ". Take a new one: Settings → Backup now.", 13, Ui.RED, false));
+            p.addView(bc);
+        }
+
         double[] dt = db.total(day, day), mt = db.total(ms, me);
         p.addView(pair(kpi("Sales on " + Calc.shortDate(day), Ui.money(dt[1]), Ui.PRIMARY),
                 kpi("Sales in " + mName, Ui.money(mt[1]), Ui.GREEN)));

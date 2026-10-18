@@ -89,6 +89,27 @@ final class SettingsScreen extends Screen {
         tc.addView(saveTrucks, Ui.fullWidth());
         p.addView(tc);
 
+        // Backup & restore
+        LinearLayout bc = Ui.card(a, "Backup & Restore");
+        String last = db.setting("last_backup", "");
+        bc.addView(Ui.text(a, (last.isEmpty() ? "No backup taken yet." : "Last backup: " + Calc.nice(last))
+                + "\nBackup saves ALL data (sales, rates, trucks) to one file. Choose Google Drive or another "
+                + "cloud app in the picker to keep it safe off the phone, or save it to Downloads / SD card. "
+                + "Take a backup at least once a week.", 12, Ui.MUTED, false));
+        Button backup = Ui.button(a, "Backup now", true);
+        backup.setOnClickListener(v -> a.saveFile("TruckSales_backup_" + Calc.today() + ".db", "application/octet-stream",
+                "Backup saved.", o -> { db.backup(o); db.setSetting("last_backup", Calc.today()); }));
+        LinearLayout.LayoutParams bl = Ui.fullWidth();
+        bl.setMargins(0, Ui.dp(a, 8), 0, Ui.dp(a, 6));
+        bc.addView(backup, bl);
+        Button restore = Ui.button(a, "Restore from backup", false);
+        restore.setOnClickListener(v -> new AlertDialog.Builder(a).setTitle("Restore backup?")
+                .setMessage("All data on this phone will be REPLACED by the data in the backup file. Continue?")
+                .setPositiveButton("Choose file", (d, w) -> a.openFile("Backup restored.", in -> db.restore(in)))
+                .setNegativeButton("Cancel", null).show());
+        bc.addView(restore, Ui.fullWidth());
+        p.addView(bc);
+
         // PIN
         LinearLayout sc = Ui.card(a, "Security");
         Button pin = Ui.button(a, "Change PIN", false);
