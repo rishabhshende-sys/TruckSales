@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.retail.trucksales'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.retail.trucksales'
+        minSdk 21
+        targetSdk 34
+        versionCode 3
+        versionName '1.2'
+    }
+
+    // Fixed signing key so every new build can be installed over the old one WITHOUT losing data.
+    signingConfigs {
+        release {
+            storeFile file('release.jks')
+            storePassword 'trucksales'
+            keyAlias 'trucksales'
+            keyPassword 'trucksales'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+// No external libraries: UI, charts and SQLite all use the built-in Android framework.
